@@ -1,0 +1,142 @@
+from pickle import FALSE, TRUE
+import  cv2
+import numpy as np
+
+
+if __name__ == '__main__':
+    # 鱼眼畸变图内参
+    K_ = np.array([426.666666666667,0,960.000000000000,0,426.666666666667,600.000000000000,0,0,1], np.float32).reshape(3,3)
+    # 鱼眼畸变图畸变系数 用的是opencv fisheye模型
+    D_ = np.array([0.058968600000, -0.010222100000,0.001918210000, -0.000627711000], np.float32)
+    #计算出来摄像头外参
+    Tvec_ = np.array([52.096304699100, 2149.916214944551,-1431.591440962086], np.float32).reshape(3,1)  
+    
+    #人为改变外参--改变旋转向量相当于改变相机的视角
+    Rvec_ = np.array([2.2664285, 0,0], np.float32)
+    #原本的相机外参
+    Rvec_Old = np.array([ 2.266387559511, -0.022107985506, 0.022552909624], np.float32)
+
+    path_top = './0_cam_front.bmp'
+    #原始图
+    src_img = cv2.imread(path_top)
+    #改变视角的视图
+    srcimg_chg = np.zeros((src_img.shape[0],src_img.shape[1], src_img.shape[2]), np.int32)
+    
+    #原图大小
+    image_size = (1920,1200)
+    #生成去畸变视图内参矩阵
+    new_camera_matrix = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(K_, D_,  image_size, np.eye(3),balance=1)
+    # print("new_camera_matrix")
+    # print(new_camera_matrix)
+    #生成x y映射图
+    map1, map2 = cv2.fisheye.initUndistortRectifyMap(K_, D_, np.eye(3), new_camera_matrix,(1920,1200), cv2.CV_16SC2)
+    # print("MAP 1")
+    # print(map1)
+    # print("MAP 2")
+    # print(map2)
+    #生成去畸变视图
+    undistorted_img = cv2.remap(src_img, map1, map2, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
+    cv2.imwrite("./undistSitchImg.bmp",undistorted_img)
+
+
+    # distuv = cv2.fisheye.distortPoints(corners.reshape(-1,1,2), K_, D_,1) 
+    #RT矩阵 R第三列 因为z =0 所以可以去掉
+    #  新视角图和原图视角像素关系
+    # K1_3X3 * RT1_3X3 *  K2_3X3^-1 *  RT2_3X3^-1  *  Zc2  / Zc1 *  [u2 v2 1] =    [u1 v1 1]
+    # [R0 R1 T0]
+    # [R2 R3 T1]
+    # [R4 R5 T2]
+    delete_index  = [2]
+    R1 , _ = cv2.Rodrigues(Rvec_Old)
+    RR1 = np.delete(R1, delete_index, axis=1)
+    Tct1 = np.hstack([RR1, Tvec_])
+############
+    delete_index  = [2]
+    R2 , _ = cv2.Rodrigues(Rvec_)
+    RR2 = np.delete(R2, delete_index, axis=1)
+    Tct2 = np.hstack([RR2, Tvec_])
+     
+    Tct2 = np.matmul(K_,Tct2)
+    R_Tct2 =  np.linalg.inv(Tct2)
+    TransMat =   np.matmul(Tct1  , R_Tct2)
+    # print("TransMat")
+
+    # print(TransMat)
+    TransMat = np.matmul( K_ , TransMat)
+
+    MRT1 = np.matmul( K_ , Tct1)   
+    MRT1_INV = np.linalg.inv(MRT1)
+
+    # print("TransMat2")
+    # print(TransMat)
+
+
+    distord_img = np.zeros((src_img.shape[0],src_img.shape[1], src_img.shape[2]), np.int32)
+
+    K_INV =  np.linalg.inv(K_)
+
+    # 生成变换后的去畸变视图
+    cv2.imwrite("./beforechg1.bmp",srcimg_chg)
+    for v in range(0, 1920-1):
+        for u in range(0 , 1200-1):
+            uv =[v ,u,1]  
+           # print(uv)
+            uv0 =  np.matmul(TransMat ,uv)            
+            uv0[0] = uv0[0] / uv0[2]
+            uv0[1] = uv0[1] / uv0[2]
+            uv0[2] = uv0[2] / uv0[2]
+            if uv0[0] >  1920 -1:
+                uv0[0] = 1920 -1
+            if uv0[1] >  1200 -1:
+                uv0[1] = 1200 -1    
+            if uv0[0] <  0:
+                uv0[0] = 0
+            if uv0[1] < 0 :
+                uv0[1] = 0        
+
+            srcimg_chg[int(u),int(v),0] = undistorted_img[int(uv0[1] + 0.5),int(uv0[0] + 0.5),0]
+            srcimg_chg[int(u),int(v),1] = undistorted_img[int(uv0[1] + 0.5),int(uv0[0] + 0.5),1]
+            srcimg_chg[int(u),int(v),2] = undistorted_img[int(uv0[1] + 0.5),int(uv0[0] + 0.5),2]
+    cv2.imwrite("./afterChgViewUndist.bmp",srcimg_chg)
+
+
+    for v in range(0, 1920-1):
+        for u in range(0 , 1200-1):                    
+            corners = np.zeros((1, 2), np.float32)
+            # 改变视角后的图像像素坐标
+            corners[0,0]  = v
+            corners[0,1]  = u
+            #像素去畸变
+            corners1 = cv2.fisheye.undistortPoints(corners.reshape(-1,1,2), K_, D_, None, P = K_)
+            corners1 = corners1.reshape(1,2)
+            # print("corners1")
+            # print(corners1)
+            corners2 = np.zeros((3, 1), np.float32)
+            
+            corners2[0,0]  = corners1[0,0]
+            corners2[1,0]  = corners1[0,1]
+            corners2[2,0]  = 1
+            #转换为X Y 0 平面上的世界坐标
+            XY = np.matmul( R_Tct2 , corners2)   
+            #尺度变换
+            XY[0] = XY[0] / XY[2]
+            XY[1] = XY[1] / XY[2]
+            XY[2] = 0;#XY[2] / XY[2]
+            #投影到原始图的像素坐标
+            wpts = cv2.fisheye.projectPoints(XY.reshape(-1,1,3).copy(), Rvec_Old.copy(), Tvec_.copy(), K_, D_)[0]
+ 
+            distuv = wpts.reshape(1,2)
+            uv0[0] = distuv[0,0]
+            uv0[1] = distuv[0,1]
+
+            if int(uv0[0] + 0.5) >  (1920 -1) or int(uv0[1] + 0.5) >  (1200 -1 ) or int(uv0[0] + 0.5) <  0 or int(uv0[1] + 0.5) < 0:
+                distord_img[int(u),int(v),0] = 0#src_img[int(uv0[1] + 0.5),int(uv0[0] + 0.5),0] 
+                distord_img[int(u),int(v),1] = 0#src_img[int(uv0[1] + 0.5),int(uv0[0] + 0.5),1]
+                distord_img[int(u),int(v),2] = 0#src_img[int(uv0[1] + 0.5),int(uv0[0] + 0.5),2]   
+                continue
+
+            distord_img[int(u),int(v),0] = src_img[int(uv0[1] + 0.5),int(uv0[0] + 0.5),0] 
+            distord_img[int(u),int(v),1] = src_img[int(uv0[1] + 0.5),int(uv0[0] + 0.5),1]
+            distord_img[int(u),int(v),2] = src_img[int(uv0[1] + 0.5),int(uv0[0] + 0.5),2]
+   #生成改变视角后的图像
+    cv2.imwrite("./ChgViewDistord_img1.bmp",distord_img) 
